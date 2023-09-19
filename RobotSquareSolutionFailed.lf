@@ -1,0 +1,113 @@
+/**
+ * Template for robot driving lab exercises.
+ * This template just periodically switches between a
+ * TURNING and a DRIVING mode, updating the LCD display
+ * on each change of mode.
+ */
+ target C {
+    platform: {
+      name: "rp2040",
+      board: "pololu_3pi_2040_robot"
+    },
+    threading: false,
+  }
+  
+  import Display from "lib/Display.lf"
+  import Motors from "lib/Motors.lf"
+  import GyroAngle from "lib/IMU.lf"
+  import Encoders from "lib/Encoders.lf"
+  
+  reactor Robot {
+    input drive:bool       // Toggle mode.
+    output notify:string   // Notify of mode change.
+
+    state gyrox_i:float
+    state gyroy_i:float
+    state gyroz_i:float
+
+    state encoder_i:float
+
+    motors = new Motors();
+    gyro = new GyroAngle();
+    encoder = new Encoders();
+    display = new Display()
+  
+    reaction(startup) -> notify, motors.left_power, motors.right_power {=
+      lf_set(notify, "INIT");
+    =}
+
+    timer t(0, 50 ms)
+    reaction(t) -> encoder.trigger, gyro.trigger {=
+        lf_set(encoder.trigger, true);
+        lf_set(gyro.trigger, true);
+    =}
+  
+    initial mode TURNING {
+      reaction(drive, gyro.x, gyro.y, gyro.z) encoder.left -> motors.left_power, motors.right_power, DRIVING, display.line0, display.line1, display.line2, display.line3 {=
+        static char buf2[25];
+        snprintf(buf2, 25, "Gryo x: %.1f", gyro.x->value);
+        lf_set(display.line1, buf2);
+        
+        static char buf3[25];
+        snprintf(buf3, 25, "Gyro y: %.1f", gyro.y->value);
+        lf_set(display.line2, buf3);
+
+        static char buf4[25];
+        snprintf(buf4, 25, "Gyro z: %.1f", gyro.z->value);
+        lf_set(display.line3, buf4);
+        
+        if (drive->value || abs(gyro.z->value - self->gyroz_i) >= 90 /*|| gyro.y->value - self->gyroy_i > 90*/) {
+          drive->value = false;
+
+          lf_set_mode(DRIVING);
+          static char buf[20];
+          snprintf(buf, 20, "DRIVING");
+          lf_set(display.line0, buf);
+
+          lf_set(motors.left_power, 0.1f);
+          lf_set(motors.right_power, 0.1f);
+
+          self->encoder_i = encoder.left->value;
+        }
+      =}
+    }
+  
+    mode DRIVING {
+      reaction(encoder.left) gyro.x, gyro.y, gyro.z -> motors.left_power, motors.right_power, TURNING, display.line0, display.line1, display.line2 {=
+        static char buf3[25];
+        snprintf(buf3, 25, "Driving init: %.1f", (float)encoder.left->value);
+        lf_set(display.line2, buf3);
+        
+        static char buf2[25];
+        snprintf(buf2, 25, "Drive: %.1f", self->encoder_i);
+        lf_set(display.line1, buf2);
+
+        if ((float)encoder.left->value - self->encoder_i > 3000) {
+          lf_set_mode(TURNING);
+          static char buf[20];
+          snprintf(buf, 20, "TURNING");
+          lf_set(display.line0, buf);
+
+          lf_set(motors.left_power, 0.1f);
+          lf_set(motors.right_power, 0);
+
+          self->gyrox_i = gyro.x->value;
+          self->gyroy_i = gyro.y->value;
+          self->gyroz_i = gyro.z->value;
+        }
+      =}
+    }
+  }
+  
+  main reactor {
+    timer t(0, 2 sec)
+    state drive:bool = true
+    robot = new Robot()
+    reaction(t) -> robot.drive {=
+        if (self->drive) {
+          lf_set(robot.drive, true);
+          self->drive = false;
+        }
+    =}
+  }
+  
